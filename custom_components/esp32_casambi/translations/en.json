@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect ESP32 Casambi Controller",
+        "description": "Enter the IP address of your ESP32 Casambi Controller, e.g. 192.168.1.100. The password is the same Casambi network password configured on the controller - leave empty if none is set there.",
+        "data": {
+          "host": "Host / IP address",
+          "password": "Casambi network password (optional)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-enter Casambi password",
+        "description": "The controller rejected the stored password (e.g. it was changed on the controller). Please enter the current Casambi network password.",
+        "data": {
+          "password": "Casambi network password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the controller. Check the IP address and make sure it's on the same network.",
+      "invalid_auth": "The controller rejected the API key. Check that the password matches the Casambi network password configured on the controller."
+    },
+    "abort": {
+      "already_configured": "This controller is already configured."
+    }
+  }
+}
