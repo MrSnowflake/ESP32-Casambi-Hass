@@ -128,9 +128,24 @@ class Esp32CasambiLight(CoordinatorEntity[Esp32CasambiCoordinator], LightEntity)
 
     @property
     def is_on(self) -> bool | None:
+        """Derived from `level`, not the `on` field.
+
+        The controller firmware itself documents `on` as indistinguishable
+        from `online` (mesh reachability) rather than a true "is glowing"
+        signal, and explicitly recommends deriving actual on/off state from
+        `level` instead (see the FHEM_API_VERSION 1.3 changelog in the
+        firmware's config.h). Relying on `on` caused this integration to
+        keep showing a unit as "on" after it was switched off from the
+        official Casambi app, since the unit stays online/reachable.
+        """
         unit = self._current_unit
         if unit is None:
             return None
+        level = unit.get("level")
+        if level is not None:
+            return level > 0
+        # Older firmware without `level` in GET /api/units: fall back to
+        # the (less reliable) `on` field rather than showing "unknown".
         return bool(unit.get("on", False))
 
     @property

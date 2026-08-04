@@ -1,11 +1,11 @@
 {
   "domain": "esp32_casambi",
   "name": "ESP32 Casambi Controller",
-  "codeowners": ["@drschnalli"],
+  "codeowners": [],
   "config_flow": true,
-  "documentation": "https://github.com/drschnalli/ESP32-Casambi-Hass",
+  "documentation": "https://github.com/lian/esp32-casambi",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/drschnalli/ESP32-Casambi-Hass/issues",
+  "issue_tracker": "https://github.com/lian/esp32-casambi/issues",
   "requirements": [],
-  "version": "0.3.0"
+  "version": "0.3.1"
 }
