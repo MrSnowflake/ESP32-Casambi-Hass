@@ -36,7 +36,16 @@ async def async_setup_entry(
     )
 
     coordinator = Esp32CasambiCoordinator(hass, client)
+    # Establishes the initial unit list via REST first - this is also
+    # what surfaces a bad password as ConfigEntryAuthFailed right away,
+    # before the WebSocket (which would hit the same auth check) even
+    # gets a chance to connect.
     await coordinator.async_config_entry_first_refresh()
+
+    # WebSocket takes over as the live-update source from here; REST
+    # polling automatically resumes if it ever disconnects.
+    coordinator.start_websocket()
+    entry.async_on_unload(coordinator.async_stop)
 
     entry.runtime_data = Esp32CasambiData(client=client, coordinator=coordinator)
 
@@ -47,5 +56,9 @@ async def async_setup_entry(
 async def async_unload_entry(
     hass: HomeAssistant, entry: Esp32CasambiConfigEntry
 ) -> bool:
-    """Unload a config entry."""
+    """Unload a config entry.
+
+    The WebSocket task is stopped automatically via the
+    entry.async_on_unload(coordinator.async_stop) hook registered above.
+    """
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
