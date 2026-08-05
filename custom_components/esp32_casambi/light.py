@@ -1,201 +1,291 @@
-"""Light platform for the ESP32 Casambi Controller integration."""
+"""Light entities for ESP32 Casambi units, groups and scenes."""
 from __future__ import annotations
 
-import logging
 from typing import Any
+
+import voluptuous as vol
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_COLOR_TEMP_KELVIN,
+    ATTR_RGB_COLOR,
     ColorMode,
     LightEntity,
 )
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_HOST
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.entity_platform import AddEntitiesCallback, async_get_current_platform
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import Esp32CasambiConfigEntry
-from .api import Esp32CasambiApiError
-from .const import DOMAIN
+from .api import Esp32CasambiClient
+from .const import CASAMBI_MAX_LEVEL, DOMAIN
 from .coordinator import Esp32CasambiCoordinator
 
-_LOGGER = logging.getLogger(__name__)
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
+    """Set up light entities."""
+    runtime = hass.data[DOMAIN][entry.entry_id]
+    coordinator: Esp32CasambiCoordinator = runtime["coordinator"]
+    client: Esp32CasambiClient = runtime["client"]
+    host = entry.data.get(CONF_HOST, "esp32")
+
+    platform = async_get_current_platform()
+    platform.async_register_entity_service(
+        "set_vertical",
+        {vol.Required("value"): vol.All(vol.Coerce(int), vol.Range(min=0, max=CASAMBI_MAX_LEVEL))},
+        "async_set_vertical",
+    )
+    platform.async_register_entity_service(
+        "set_slider",
+        {vol.Required("value"): vol.All(vol.Coerce(int), vol.Range(min=0, max=CASAMBI_MAX_LEVEL))},
+        "async_set_slider",
+    )
+    platform.async_register_entity_service(
+        "set_unit_state",
+        {vol.Required("state"): cv.schema_with_slug_keys(vol.All(vol.Coerce(int), vol.Range(min=0, max=CASAMBI_MAX_LEVEL)))},
+        "async_set_unit_state",
+    )
+
+    entities: list[LightEntity] = []
+    entities.extend(Esp32CasambiUnitLight(coordinator, client, host, item) for item in coordinator.data.get("units", []))
+    entities.extend(Esp32CasambiGroupLight(coordinator, client, host, item) for item in coordinator.data.get("groups", []))
+    entities.extend(Esp32CasambiSceneLight(coordinator, client, host, item) for item in coordinator.data.get("scenes", []))
+    async_add_entities(entities)
 
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: Esp32CasambiConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up lights for each known Casambi unit."""
-    data = entry.runtime_data
-    coordinator = data.coordinator
-
-    known_unit_ids: set[int] = set()
-
-    @callback
-    def _async_add_new_units() -> None:
-        """Add entities for any unit not seen before (e.g. added later
-        in the Casambi app and picked up on the next coordinator poll)."""
-        new_entities = []
-        for unit in coordinator.data.get("units", []):
-            unit_id = unit["id"]
-            if unit_id in known_unit_ids:
-                continue
-            known_unit_ids.add(unit_id)
-            new_entities.append(
-                Esp32CasambiLight(coordinator, data.client, entry.entry_id, unit)
-            )
-        if new_entities:
-            async_add_entities(new_entities)
-
-    _async_add_new_units()
-    entry.async_on_unload(coordinator.async_add_listener(_async_add_new_units))
-
-
-class Esp32CasambiLight(CoordinatorEntity[Esp32CasambiCoordinator], LightEntity):
-    """Representation of a single Casambi light unit.
-
-    As of the akumap fork, GET /api/units reports real-time `on`, `level`,
-    and (for CCT-capable fixtures) `colorTemp` values - these are pushed
-    into the controller's in-memory state from BLE status broadcasts, so
-    they reflect changes made via the official Casambi app, timers,
-    sensors, or other controllers, not just commands sent from HA. This
-    entity reads state straight from the coordinator; no local/optimistic
-    tracking is needed anymore. Vertical light distribution and RGB color
-    are not exposed here (Home Assistant's light entity model doesn't map
-    cleanly onto "vertical"), only on/off, brightness, and color
-    temperature.
-    """
+class Esp32CasambiBaseLight(CoordinatorEntity[Esp32CasambiCoordinator], LightEntity):
+    """Shared base for Casambi light-like entities."""
 
     _attr_has_entity_name = True
-    _attr_name = None
 
     def __init__(
         self,
         coordinator: Esp32CasambiCoordinator,
-        client,
-        entry_id: str,
-        unit: dict[str, Any],
+        client: Esp32CasambiClient,
+        host: str,
+        item: dict[str, Any],
+        kind: str,
     ) -> None:
         super().__init__(coordinator)
-        self._client = client
-        self._unit_id: int = unit["id"]
+        self.client = client
+        self.host = host
+        self.kind = kind
+        self.item_id = _item_id(item)
+        self._initial_name = _item_name(item, f"Casambi {kind.title()} {self.item_id}")
+        self._attr_unique_id = f"{DOMAIN}_{host}_{kind}_{self.item_id}"
+        self._attr_name = self._initial_name
 
-        self._attr_unique_id = f"{entry_id}_unit_{self._unit_id}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, self._attr_unique_id)},
-            "name": unit.get("name", f"Unit {self._unit_id}"),
-            "manufacturer": "Casambi",
-            "via_device": (DOMAIN, entry_id),
+    @property
+    def item(self) -> dict[str, Any]:
+        """Return the latest item data from the coordinator."""
+        for candidate in self.coordinator.data.get(f"{self.kind}s", []):
+            if _item_id(candidate) == self.item_id:
+                return candidate
+        return {}
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        return {
+            "identifiers": {(DOMAIN, f"{self.host}_{self.kind}_{self.item_id}")},
+            "name": self._initial_name,
+            "manufacturer": "Casambi via ESP32",
+            "model": f"Casambi {self.kind.title()}",
+            "via_device": (DOMAIN, self.host),
         }
-
-        # CCT capability is fixed for a given physical fixture, so it's
-        # safe to decide the supported color modes once at creation time
-        # from whichever unit snapshot triggered entity creation.
-        if "cctMin" in unit and "cctMax" in unit:
-            self._attr_supported_color_modes = {ColorMode.COLOR_TEMP}
-            self._attr_color_mode = ColorMode.COLOR_TEMP
-            self._attr_min_color_temp_kelvin = unit["cctMin"]
-            self._attr_max_color_temp_kelvin = unit["cctMax"]
-        else:
-            self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
-            self._attr_color_mode = ColorMode.BRIGHTNESS
-
-    @property
-    def _current_unit(self) -> dict[str, Any] | None:
-        for unit in self.coordinator.data.get("units", []):
-            if unit["id"] == self._unit_id:
-                return unit
-        return None
-
-    @property
-    def name(self) -> str:
-        unit = self._current_unit
-        return unit.get("name", f"Unit {self._unit_id}") if unit else f"Unit {self._unit_id}"
-
-    @property
-    def available(self) -> bool:
-        """Entity is available if the coordinator is working and the unit
-        is reported online by the controller."""
-        if not super().available:
-            return False
-        unit = self._current_unit
-        if unit is None:
-            # Unit disappeared from the controller's list entirely.
-            return False
-        return unit.get("online", True)
-
-    @property
-    def is_on(self) -> bool | None:
-        """Derived from `level`, not the `on` field.
-
-        The controller firmware itself documents `on` as indistinguishable
-        from `online` (mesh reachability) rather than a true "is glowing"
-        signal, and explicitly recommends deriving actual on/off state from
-        `level` instead (see the FHEM_API_VERSION 1.3 changelog in the
-        firmware's config.h). Relying on `on` caused this integration to
-        keep showing a unit as "on" after it was switched off from the
-        official Casambi app, since the unit stays online/reachable.
-        """
-        unit = self._current_unit
-        if unit is None:
-            return None
-        level = unit.get("level")
-        if level is not None:
-            return level > 0
-        # Older firmware without `level` in GET /api/units: fall back to
-        # the (less reliable) `on` field rather than showing "unknown".
-        return bool(unit.get("on", False))
 
     @property
     def brightness(self) -> int | None:
-        unit = self._current_unit
-        if unit is None:
-            return None
-        return unit.get("level")
+        level = self.item.get("level")
+        if level is None:
+            level = self.item.get("brightness")
+        return _byte_or_none(level)
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self.item.get("on")
+        if isinstance(state, bool):
+            return state
+        level = self.brightness
+        if level is not None:
+            return level > 0
+        return None
+
+
+class Esp32CasambiUnitLight(Esp32CasambiBaseLight):
+    """Individual Casambi unit."""
+
+    def __init__(self, coordinator: Esp32CasambiCoordinator, client: Esp32CasambiClient, host: str, item: dict[str, Any]) -> None:
+        super().__init__(coordinator, client, host, item, "unit")
+
+    @property
+    def supported_color_modes(self) -> set[ColorMode]:
+        modes = {ColorMode.BRIGHTNESS}
+        if self._supports_color_temp:
+            modes.add(ColorMode.COLOR_TEMP)
+        if self._supports_rgb:
+            modes.add(ColorMode.RGB)
+        return modes
+
+    @property
+    def color_mode(self) -> ColorMode:
+        if self._supports_rgb and self.rgb_color:
+            return ColorMode.RGB
+        if self._supports_color_temp and self.color_temp_kelvin:
+            return ColorMode.COLOR_TEMP
+        return ColorMode.BRIGHTNESS
+
+    @property
+    def _supports_color_temp(self) -> bool:
+        item = self.item
+        return item.get("cctMin") is not None and item.get("cctMax") is not None
+
+    @property
+    def _supports_rgb(self) -> bool:
+        item = self.item
+        return any(key in item for key in ("r", "red", "rgb", "color"))
+
+    @property
+    def min_color_temp_kelvin(self) -> int | None:
+        return _int_or_none(self.item.get("cctMin"))
+
+    @property
+    def max_color_temp_kelvin(self) -> int | None:
+        return _int_or_none(self.item.get("cctMax"))
 
     @property
     def color_temp_kelvin(self) -> int | None:
-        """Convert the controller's normalized 0-255 colorTemp to Kelvin.
+        for key in ("colorTemp", "kelvin", "temperature"):
+            value = _int_or_none(self.item.get(key))
+            if value is not None:
+                return value
+        return None
 
-        Formula matches the upstream README: kelvin = cctMin +
-        (colorTemp / 255) * (cctMax - cctMin).
-        """
-        unit = self._current_unit
-        if unit is None or "colorTemp" not in unit:
-            return None
-        cct_min = unit.get("cctMin", self._attr_min_color_temp_kelvin)
-        cct_max = unit.get("cctMax", self._attr_max_color_temp_kelvin)
-        return round(cct_min + (unit["colorTemp"] / 255) * (cct_max - cct_min))
+    @property
+    def rgb_color(self) -> tuple[int, int, int] | None:
+        item = self.item
+        if isinstance(item.get("rgb"), list | tuple) and len(item["rgb"]) >= 3:
+            return tuple(_clamp_byte(v) for v in item["rgb"][:3])  # type: ignore[return-value]
+        if isinstance(item.get("color"), dict):
+            color = item["color"]
+            return (_clamp_byte(color.get("r", 0)), _clamp_byte(color.get("g", 0)), _clamp_byte(color.get("b", 0)))
+        if any(k in item for k in ("r", "red")):
+            return (_clamp_byte(item.get("r", item.get("red", 0))), _clamp_byte(item.get("g", item.get("green", 0))), _clamp_byte(item.get("b", item.get("blue", 0))))
+        return None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        brightness = kwargs.get(ATTR_BRIGHTNESS)
-        color_temp_kelvin = kwargs.get(ATTR_COLOR_TEMP_KELVIN)
+        if ATTR_BRIGHTNESS in kwargs:
+            await self.client.async_unit_level(self.item_id, kwargs[ATTR_BRIGHTNESS])
+        elif kwargs.get(ATTR_COLOR_TEMP_KELVIN) is None and kwargs.get(ATTR_RGB_COLOR) is None:
+            await self.client.async_unit_on(self.item_id)
 
-        try:
-            # Casambi units accept these as independent operations; send
-            # color temp first so a simultaneous brightness+CCT call from
-            # HA (e.g. a script) still ends up with both applied.
-            if color_temp_kelvin is not None:
-                await self._client.async_unit_temperature(
-                    self._unit_id, color_temp_kelvin
-                )
-            if brightness is not None:
-                await self._client.async_unit_level(self._unit_id, brightness)
-            elif color_temp_kelvin is None:
-                await self._client.async_unit_on(self._unit_id)
-        except Esp32CasambiApiError as err:
-            _LOGGER.error("Failed to turn on unit %s: %s", self._unit_id, err)
-            return
+        if ATTR_COLOR_TEMP_KELVIN in kwargs:
+            await self.client.async_unit_temperature(self.item_id, kwargs[ATTR_COLOR_TEMP_KELVIN])
+        if ATTR_RGB_COLOR in kwargs:
+            red, green, blue = kwargs[ATTR_RGB_COLOR]
+            await self.client.async_unit_color(self.item_id, red, green, blue)
 
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        try:
-            await self._client.async_unit_off(self._unit_id)
-        except Esp32CasambiApiError as err:
-            _LOGGER.error("Failed to turn off unit %s: %s", self._unit_id, err)
-            return
-
+        await self.client.async_unit_off(self.item_id)
         await self.coordinator.async_request_refresh()
+
+    async def async_set_vertical(self, value: int) -> None:
+        await self.client.async_unit_vertical(self.item_id, value)
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_slider(self, value: int) -> None:
+        await self.client.async_unit_slider(self.item_id, value)
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_unit_state(self, state: dict[str, int]) -> None:
+        await self.client.async_unit_state(self.item_id, state)
+        await self.coordinator.async_request_refresh()
+
+
+class Esp32CasambiGroupLight(Esp32CasambiBaseLight):
+    """Casambi group exposed as a dimmable light."""
+
+    _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+    _attr_color_mode = ColorMode.BRIGHTNESS
+
+    def __init__(self, coordinator: Esp32CasambiCoordinator, client: Esp32CasambiClient, host: str, item: dict[str, Any]) -> None:
+        super().__init__(coordinator, client, host, item, "group")
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        level = kwargs.get(ATTR_BRIGHTNESS, self.brightness or CASAMBI_MAX_LEVEL)
+        await self.client.async_group_level(self.item_id, level)
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        # The ESP32 API currently documents group level/vertical/slider, but no group /off endpoint.
+        await self.client.async_group_level(self.item_id, 0)
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_vertical(self, value: int) -> None:
+        await self.client.async_group_vertical(self.item_id, value)
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_slider(self, value: int) -> None:
+        await self.client.async_group_slider(self.item_id, value)
+        await self.coordinator.async_request_refresh()
+
+
+class Esp32CasambiSceneLight(Esp32CasambiBaseLight):
+    """Casambi scene exposed as a light-like entity for on/off/level control."""
+
+    _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+    _attr_color_mode = ColorMode.BRIGHTNESS
+
+    def __init__(self, coordinator: Esp32CasambiCoordinator, client: Esp32CasambiClient, host: str, item: dict[str, Any]) -> None:
+        super().__init__(coordinator, client, host, item, "scene")
+        self._attr_unique_id = f"{DOMAIN}_{host}_scene_light_{self.item_id}"
+        self._attr_name = f"{self._initial_name} Scene Control"
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        if ATTR_BRIGHTNESS in kwargs:
+            await self.client.async_scene_level(self.item_id, kwargs[ATTR_BRIGHTNESS])
+        else:
+            await self.client.async_scene_on(self.item_id)
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self.client.async_scene_off(self.item_id)
+        await self.coordinator.async_request_refresh()
+
+
+def _item_id(item: dict[str, Any]) -> int:
+    for key in ("id", "unitId", "groupId", "sceneId"):
+        value = _int_or_none(item.get(key))
+        if value is not None:
+            return value
+    return 0
+
+
+def _item_name(item: dict[str, Any], fallback: str) -> str:
+    for key in ("name", "label", "address"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return fallback
+
+
+def _byte_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    return _clamp_byte(value)
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clamp_byte(value: Any) -> int:
+    return max(0, min(CASAMBI_MAX_LEVEL, int(value)))

@@ -2,27 +2,20 @@
   "config": {
     "step": {
       "user": {
-        "title": "ESP32 Casambi Controller verbinden",
-        "description": "Gib die IP-Adresse deines ESP32 Casambi Controllers ein, z. B. 192.168.1.100. Das Passwort ist dasselbe Casambi-Netzwerk-Passwort, das auf dem Controller konfiguriert ist - leer lassen, falls dort kein Passwort gesetzt ist.",
+        "title": "ESP32 Casambi Controller",
+        "description": "Gib Host/IP des ESP32 Casambi Controllers und optional das Casambi Netzwerkpasswort ein.",
         "data": {
-          "host": "Host / IP-Adresse",
-          "password": "Casambi-Netzwerk-Passwort (optional)"
-        }
-      },
-      "reauth_confirm": {
-        "title": "Casambi-Passwort erneut eingeben",
-        "description": "Der Controller hat das gespeicherte Passwort abgelehnt (z. B. weil es auf dem Controller geändert wurde). Bitte aktuelles Casambi-Netzwerk-Passwort eingeben.",
-        "data": {
-          "password": "Casambi-Netzwerk-Passwort"
+          "host": "Host/IP-Adresse",
+          "password": "Casambi Netzwerkpasswort"
         }
       }
     },
     "error": {
-      "cannot_connect": "Verbindung zum Controller fehlgeschlagen. Prüfe die IP-Adresse und ob sich das Gerät im selben Netzwerk befindet.",
-      "invalid_auth": "Der Controller hat den API-Key abgelehnt. Prüfe, ob das Passwort mit dem auf dem Controller konfigurierten Casambi-Netzwerk-Passwort übereinstimmt."
+      "cannot_connect": "Verbindung zum ESP32 Casambi Controller fehlgeschlagen",
+      "invalid_auth": "Ungültiger API-Key bzw. ungültiges Passwort"
     },
     "abort": {
-      "already_configured": "Dieser Controller ist bereits eingerichtet."
+      "already_configured": "Dieser ESP32 Casambi Controller ist bereits konfiguriert"
     }
   }
 }
