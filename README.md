@@ -4,9 +4,9 @@ Custom Home Assistant integration for the [akumap/esp32-casambi](https://github.
 
 Each Casambi unit is exposed as a `light` entity with:
 
-- **On/off** and **brightness**, read live from the controller (pushed from the Casambi BLE mesh, not just commands sent by Home Assistant)
+- **On/off** and **brightness**, pushed live over the controller's WebSocket (`ws://<host>/ws`, sub-100ms latency) — reflects changes made from the official Casambi app, scene timers, sensors, or other controllers, not just commands sent from Home Assistant. REST polling (`GET /api/units`) is used as a fallback while the WebSocket is disconnected or hasn't connected yet.
 - **Color temperature**, for fixtures that report `cctMin`/`cctMax` (converted to Kelvin)
-- **Auth support** — the `X-API-Key` token is derived from your Casambi network password, matching the controller's authentication scheme
+- **Auth support** — the `X-API-Key` token is derived from your Casambi network password, matching the controller's authentication scheme (used for both REST and the WebSocket upgrade)
 
 ## Requirements
 
@@ -24,7 +24,6 @@ Each Casambi unit is exposed as a `light` entity with:
 
 ## What this integration does *not* do (yet)
 
-- No WebSocket push client — state is polled via `GET /api/units` every 10 seconds. Since that endpoint already reports live values, this gives near-real-time state without needing a persistent WebSocket connection, but it isn't as instant as the firmware's own WebSocket push (sub-100ms).
 - No vertical light distribution or RGB color control exposed as entities (these don't map cleanly onto Home Assistant's light model).
 - No scene or group entities — only individual units.
 

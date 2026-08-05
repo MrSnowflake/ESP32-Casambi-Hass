@@ -44,12 +44,29 @@ class Esp32CasambiClient:
         self, session: aiohttp.ClientSession, host: str, password: str = ""
     ) -> None:
         self._session = session
+        self._host = host
         self._base_url = f"http://{host}/api"
         # Empty password -> no header sent -> matches the firmware's "empty
         # password = open API" fallback for pre-auth configs.
         self._headers = (
             {API_KEY_HEADER: derive_api_token(password)} if password else {}
         )
+
+    @property
+    def session(self) -> aiohttp.ClientSession:
+        """Shared HA client session, reused by the WebSocket client."""
+        return self._session
+
+    @property
+    def headers(self) -> dict[str, str]:
+        """Auth headers, reused for the WebSocket upgrade request too -
+        the firmware protects both REST and the /ws upgrade with the same
+        X-API-Key header (see API_KEY_HEADER in config.h)."""
+        return dict(self._headers)
+
+    @property
+    def ws_url(self) -> str:
+        return f"ws://{self._host}/ws"
 
     async def async_get_info(self) -> dict[str, Any]:
         """GET /api/info - the only endpoint that stays unauthenticated.
