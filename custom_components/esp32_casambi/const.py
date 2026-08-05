@@ -8,3 +8,6 @@ API_TOKEN_PREFIX = "casambi-api:"
 API_KEY_HEADER = "X-API-Key"
 CASAMBI_MAX_LEVEL = 255
 PLATFORMS = ["light", "scene"]
+
+# Some Casambi/ESP32 payloads keep level at 1 when the fixture is effectively off.
+CASAMBI_OFF_LEVEL_THRESHOLD = 1

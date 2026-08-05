@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .api import Esp32CasambiClient
-from .const import CASAMBI_MAX_LEVEL, DOMAIN
+from .const import CASAMBI_MAX_LEVEL, CASAMBI_OFF_LEVEL_THRESHOLD, DOMAIN
 from .coordinator import Esp32CasambiCoordinator
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     rt=hass.data[DOMAIN][entry.entry_id]; c=rt["coordinator"]; api=rt["client"]; host=entry.data.get(CONF_HOST,"esp32")
@@ -22,11 +22,25 @@ class Base(CoordinatorEntity[Esp32CasambiCoordinator], LightEntity):
             if _id(x)==self.item_id: return x
         return {}
     @property
-    def brightness(self): return _byte(self.item.get("level", self.item.get("brightness")))
+    def brightness(self):
+        # The controller can report level=1 for a fixture that is actually off.
+        # Home Assistant would show that as 1%, so normalize the off range to 0.
+        if self.is_on is False:
+            return 0
+        return _byte(self.item.get("level", self.item.get("brightness")))
     @property
     def is_on(self):
-        if isinstance(self.item.get("on"), bool): return self.item["on"]
-        b=self.brightness; return b>0 if b is not None else None
+        # Do NOT trust the firmware's `on` flag for actual light output.
+        # In esp32-casambi it can effectively mean reachable/online rather than
+        # "currently glowing". Therefore Home Assistant state is derived from
+        # level/brightness first. This fixes lights that are off in Casambi but
+        # stayed on in HA with 1% brightness.
+        raw_level = _byte(self.item.get("level", self.item.get("brightness")))
+        if raw_level is not None:
+            return raw_level > CASAMBI_OFF_LEVEL_THRESHOLD
+        if isinstance(self.item.get("on"), bool):
+            return self.item["on"]
+        return None
 class UnitLight(Base):
     def __init__(self,c,api,host,item): super().__init__(c,api,host,item,"unit")
     @property
@@ -61,5 +75,7 @@ def _id(item):
     return 0
 def _name(item,fallback): return next((str(item[k]).strip() for k in ("name","label","address") if item.get(k)), fallback)
 def _byte(v):
-    if v is None: return None
-    return max(0,min(CASAMBI_MAX_LEVEL,int(v)))
+    if v is None:
+        return None
+    value = max(0, min(CASAMBI_MAX_LEVEL, int(v)))
+    return 0 if value <= CASAMBI_OFF_LEVEL_THRESHOLD else value
