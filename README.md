@@ -15,6 +15,10 @@ Each Casambi unit is exposed as a `light` entity with:
 
 ## Installation via HACS
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?repository=https%3A%2F%2Fgithub.com%2Fdrschnalli%2FESP32-Casambi-Hass%2Ftree%2Fmain&owner=drschnalli&category=integration)
+
+Or Manually
+
 1. HACS → the three-dot menu (top right) → **Custom repositories**
 2. Add this repository URL, category **Integration**
 3. Find **ESP32 Casambi Controller** in HACS and install it
